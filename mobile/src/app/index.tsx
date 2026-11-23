@@ -12,11 +12,13 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
+import { Eye, EyeOff } from "lucide-react-native";
 
 export default function LoginScreen() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordVisible, setPasswordVisible] = useState(false);
 
   function connect(role: "patient" | "medecin") {
     const emailSaisi = email.trim().toLowerCase();
@@ -94,17 +96,35 @@ export default function LoginScreen() {
               />
 
               <Text style={styles.label}>Mot de passe</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Entrez votre mot de passe"
-                placeholderTextColor="#9AA8B5"
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry
-                autoCapitalize="none"
-                textContentType="password"
-                returnKeyType="done"
-              />
+
+              <View style={styles.passwordContainer}>
+                <TextInput
+                  style={styles.passwordInput}
+                  placeholder="Entrez votre mot de passe"
+                  placeholderTextColor="#9AA8B5"
+                  value={password}
+                  onChangeText={setPassword}
+                  secureTextEntry={!passwordVisible}
+                  autoCapitalize="none"
+                  textContentType="password"
+                  returnKeyType="done"
+                />
+
+                <TouchableOpacity
+                  style={styles.eyeButton}
+                  onPress={() => setPasswordVisible((visible) => !visible)}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    passwordVisible ? "Masquer le mot de passe" : "Afficher le mot de passe"
+                  }
+                >
+                  {passwordVisible ? (
+                    <Eye size={21} color="#718096" />
+                  ) : (
+                    <EyeOff size={21} color="#718096" />
+                  )}
+                </TouchableOpacity>
+              </View>
 
               <Text style={styles.roleTitle}>Choisissez votre espace</Text>
 
@@ -289,5 +309,34 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
     textAlign: "center",
+  },
+  passwordContainer: {
+    minHeight: 54,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#E3EAF0",
+    marginBottom: 18,
+  },
+
+  passwordInput: {
+    flex: 1,
+    minHeight: 52,
+    paddingHorizontal: 16,
+    fontSize: 15,
+    color: "#17324D",
+  },
+
+  eyeButton: {
+    minHeight: 52,
+    paddingHorizontal: 15,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  eyeText: {
+    fontSize: 20,
   },
 });

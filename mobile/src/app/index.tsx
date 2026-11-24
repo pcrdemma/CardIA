@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
   Platform,
@@ -13,44 +14,92 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Eye, EyeOff } from "lucide-react-native";
+import { supabase } from "../lib/supabase";
+
+type Role = "patient" | "medecin";
 
 export default function LoginScreen() {
   const router = useRouter();
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [passwordVisible, setPasswordVisible] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
-  function connect(role: "patient" | "medecin") {
+  async function connect(espaceChoisi: Role) {
+    if (isLoading) return;
+
     const emailSaisi = email.trim().toLowerCase();
-    const motDePasseSaisi = password.trim();
 
-    const comptes = {
-      patient: {
-        email: "patient1@cardia.test",
-        password: "Patient123",
-      },
-      medecin: {
-        email: "medecin1@cardia.test",
-        password: "Medecin123",
-      },
-    };
-
-    const compte = comptes[role];
-
-    if (
-      emailSaisi !== compte.email ||
-      motDePasseSaisi !== compte.password
-    ) {
+    if (!emailSaisi || !password) {
       Alert.alert(
-        "Connexion refusée",
-        "Vérifie l’adresse e-mail et le mot de passe."
+        "Champs manquants",
+        "Saisis ton adresse e-mail et ton mot de passe."
       );
       return;
     }
-    if (role === "patient") {
-      router.replace("/patient");
-    } else {
-      router.replace("/medecin");
+
+    setIsLoading(true);
+
+    try {
+      const { data: authData, error: authError } =
+        await supabase.auth.signInWithPassword({
+          email: emailSaisi,
+          password,
+        });
+
+      if (authError || !authData.user) {
+        Alert.alert(
+          "Connexion refusée",
+          "Vérifie l’adresse e-mail et le mot de passe."
+        );
+        return;
+      }
+
+      // Le rôle vient du profil en base, jamais du bouton ou des métadonnées.
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", authData.user.id)
+        .single();
+
+      if (profileError || !profile) {
+        await supabase.auth.signOut();
+        Alert.alert(
+          "Profil introuvable",
+          "Aucun profil n’est associé à ce compte. Contacte l’administrateur."
+        );
+        return;
+      }
+
+      const role = profile.role as Role;
+
+      if (role !== "patient" && role !== "medecin") {
+        await supabase.auth.signOut();
+        Alert.alert(
+          "Rôle invalide",
+          "Le rôle associé à ce compte n’est pas reconnu."
+        );
+        return;
+      }
+
+      if (role !== espaceChoisi) {
+        await supabase.auth.signOut();
+        Alert.alert(
+          "Espace incorrect",
+          `Ce compte est enregistré comme ${role}. Choisis le bon espace.`
+        );
+        return;
+      }
+
+      router.replace(role === "patient" ? "/patient" : "/medecin");
+    } catch {
+      Alert.alert(
+        "Erreur",
+        "La connexion est momentanément impossible. Réessaie."
+      );
+    } finally {
+      setIsLoading(false);
     }
   }
 
@@ -69,11 +118,16 @@ export default function LoginScreen() {
               <View style={styles.logoIcon}>
                 <Text style={styles.logoIconText}>+</Text>
               </View>
-              <Text style={styles.logo}>Card<Text style={styles.logoAccent}>IA</Text></Text>
+
+              <Text style={styles.logo}>
+                Card<Text style={styles.logoAccent}>IA</Text>
+              </Text>
             </View>
 
             <View style={styles.heading}>
-              <Text style={styles.eyebrow}>VOTRE SANTÉ, EN UN SEUL ESPACE</Text>
+              <Text style={styles.eyebrow}>
+                VOTRE SANTÉ, EN UN SEUL ESPACE
+              </Text>
               <Text style={styles.title}>Bienvenue</Text>
               <Text style={styles.subtitle}>
                 Connectez-vous pour accéder à votre espace santé.
@@ -82,6 +136,7 @@ export default function LoginScreen() {
 
             <View style={styles.form}>
               <Text style={styles.label}>Adresse e-mail</Text>
+
               <TextInput
                 style={styles.input}
                 placeholder="exemple@courriel.com"
@@ -93,6 +148,7 @@ export default function LoginScreen() {
                 autoCorrect={false}
                 textContentType="emailAddress"
                 returnKeyType="next"
+                editable={!isLoading}
               />
 
               <Text style={styles.label}>Mot de passe</Text>
@@ -108,6 +164,8 @@ export default function LoginScreen() {
                   autoCapitalize="none"
                   textContentType="password"
                   returnKeyType="done"
+                  editable={!isLoading}
+                  onSubmitEditing={() => connect("patient")}
                 />
 
                 <TouchableOpacity
@@ -115,8 +173,11 @@ export default function LoginScreen() {
                   onPress={() => setPasswordVisible((visible) => !visible)}
                   accessibilityRole="button"
                   accessibilityLabel={
-                    passwordVisible ? "Masquer le mot de passe" : "Afficher le mot de passe"
+                    passwordVisible
+                      ? "Masquer le mot de passe"
+                      : "Afficher le mot de passe"
                   }
+                  disabled={isLoading}
                 >
                   {passwordVisible ? (
                     <Eye size={21} color="#718096" />
@@ -129,31 +190,51 @@ export default function LoginScreen() {
               <Text style={styles.roleTitle}>Choisissez votre espace</Text>
 
               <TouchableOpacity
-                style={styles.patientButton}
+                style={[
+                  styles.patientButton,
+                  isLoading && styles.disabledButton,
+                ]}
                 onPress={() => connect("patient")}
                 activeOpacity={0.85}
+                disabled={isLoading}
               >
-                <Text style={styles.patientButtonText}>
-                  Continuer comme patient
-                </Text>
-                <Text style={styles.buttonArrow}>›</Text>
+                {isLoading ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <>
+                    <Text style={styles.patientButtonText}>
+                      Continuer comme patient
+                    </Text>
+                    <Text style={styles.buttonArrow}>›</Text>
+                  </>
+                )}
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={styles.doctorButton}
+                style={[
+                  styles.doctorButton,
+                  isLoading && styles.disabledButton,
+                ]}
                 onPress={() => connect("medecin")}
                 activeOpacity={0.85}
+                disabled={isLoading}
               >
-                <Text style={styles.doctorButtonText}>
-                  Continuer comme médecin
-                </Text>
-                <Text style={styles.doctorButtonArrow}>›</Text>
+                {isLoading ? (
+                  <ActivityIndicator color="#176B87" />
+                ) : (
+                  <>
+                    <Text style={styles.doctorButtonText}>
+                      Continuer comme médecin
+                    </Text>
+                    <Text style={styles.doctorButtonArrow}>›</Text>
+                  </>
+                )}
               </TouchableOpacity>
             </View>
 
             <View style={styles.footer}>
               <Text style={styles.note}>
-                Connexion de démonstration · Les identifiants sont préconfigurés.
+                Connectez-vous avec le compte créé dans Supabase.
               </Text>
             </View>
           </View>
@@ -253,6 +334,29 @@ const styles = StyleSheet.create({
     borderColor: "#E3EAF0",
     marginBottom: 18,
   },
+  passwordContainer: {
+    minHeight: 54,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#E3EAF0",
+    marginBottom: 18,
+  },
+  passwordInput: {
+    flex: 1,
+    minHeight: 52,
+    paddingHorizontal: 16,
+    fontSize: 15,
+    color: "#17324D",
+  },
+  eyeButton: {
+    minHeight: 52,
+    paddingHorizontal: 15,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   roleTitle: {
     color: "#17324D",
     fontSize: 15,
@@ -301,6 +405,9 @@ const styles = StyleSheet.create({
     fontSize: 27,
     lineHeight: 29,
   },
+  disabledButton: {
+    opacity: 0.65,
+  },
   footer: {
     marginTop: 25,
   },
@@ -309,34 +416,5 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
     textAlign: "center",
-  },
-  passwordContainer: {
-    minHeight: 54,
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#FFFFFF",
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: "#E3EAF0",
-    marginBottom: 18,
-  },
-
-  passwordInput: {
-    flex: 1,
-    minHeight: 52,
-    paddingHorizontal: 16,
-    fontSize: 15,
-    color: "#17324D",
-  },
-
-  eyeButton: {
-    minHeight: 52,
-    paddingHorizontal: 15,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  eyeText: {
-    fontSize: 20,
   },
 });

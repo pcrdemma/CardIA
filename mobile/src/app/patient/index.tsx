@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Calendar } from "react-native-calendars";
+import { supabase } from "../../lib/supabase";
 
 type Periode = "Matin" | "Après-midi";
 
@@ -25,12 +26,30 @@ type RendezVous = {
   type: string;
   medecin: string;
   lieu: string;
-  date: string; // Format YYYY-MM-DD
-  heure: string; // Format HH:mm
+  date: string;
+  heure: string;
   plageHoraire?: string;
 };
 
+type MessageApercu = {
+  id: string;
+  texte: string;
+  heure: string;
+  envoyeParMoi: boolean;
+  dateCreation?: number;
+};
+
+type ConversationApercu = {
+  id: string;
+  nom: string;
+  specialite: string;
+  emoji?: string;
+  messages: MessageApercu[];
+  doitRepondre: boolean;
+};
+
 const CLE_RENDEZ_VOUS = "rendezVousPatient";
+const CLE_CONVERSATIONS = "conversationsPatient";
 
 const MEDECINS = [
   "Dr. Sophie Martin — Cardiologue",
@@ -69,7 +88,6 @@ function melanger<T>(liste: T[]): T[] {
 }
 
 function choisirHeuresAleatoires(heures: string[]): string[] {
-  // Entre 2 et 5 horaires aléatoires sont affichés.
   const nombreDisponibles = Math.floor(Math.random() * 4) + 2;
 
   return melanger(heures)
@@ -118,9 +136,9 @@ function dateAujourdhui() {
 }
 
 function trierRendezVous(liste: RendezVous[]) {
-  return [...liste].sort((a, b) => {
-    return `${a.date}T${a.heure}`.localeCompare(`${b.date}T${b.heure}`);
-  });
+  return [...liste].sort((a, b) =>
+    `${a.date}T${a.heure}`.localeCompare(`${b.date}T${b.heure}`)
+  );
 }
 
 function dateHeureRendezVous(rdv: RendezVous) {
@@ -135,6 +153,7 @@ export default function IndexPatientScreen() {
 
   const [modalVisible, setModalVisible] = useState(false);
   const [step, setStep] = useState(1);
+  const [nomPatient, setNomPatient] = useState("Patient");
 
   const [typeRdv, setTypeRdv] = useState<string | null>(null);
   const [medecin, setMedecin] = useState<string | null>(null);
@@ -145,50 +164,111 @@ export default function IndexPatientScreen() {
 
   const [creneauxDisponibles, setCreneauxDisponibles] = useState<Creneau[]>([]);
   const [rendezVous, setRendezVous] = useState<RendezVous[]>([]);
+  const [conversations, setConversations] = useState<ConversationApercu[]>([]);
 
   useFocusEffect(
-  useCallback(() => {
-    const chargerRendezVous = async () => {
-      try {
-        const sauvegarde = await AsyncStorage.getItem(CLE_RENDEZ_VOUS);
+    useCallback(() => {
+      let actif = true;
 
-        if (!sauvegarde) {
-          setRendezVous([]);
-          return;
+      const chargerDonnees = async () => {
+        try {
+          // Charger le nom du patient depuis Supabase
+          const {
+            data: { user },
+            error: erreurUtilisateur,
+          } = await supabase.auth.getUser();
+
+          if (erreurUtilisateur) {
+            console.error(
+              "Erreur de récupération de l'utilisateur :",
+              erreurUtilisateur.message
+            );
+          }
+
+          if (user) {
+            const { data: profil, error: erreurProfil } = await supabase
+              .from("profiles")
+              .select("full_name")
+              .eq("id", user.id)
+              .single();
+
+            if (erreurProfil) {
+              console.error(
+                "Erreur de chargement du profil :",
+                erreurProfil.message
+              );
+            } else if (actif) {
+              setNomPatient(profil?.full_name?.trim() || "Patient");
+            }
+          } else if (actif) {
+            setNomPatient("Patient");
+          }
+
+          // Charger les rendez-vous et les conversations depuis AsyncStorage
+          const [sauvegardeRdv, sauvegardeConversations] = await Promise.all([
+            AsyncStorage.getItem(CLE_RENDEZ_VOUS),
+            AsyncStorage.getItem(CLE_CONVERSATIONS),
+          ]);
+
+          if (!actif) return;
+
+          if (sauvegardeRdv) {
+            const donnees: unknown = JSON.parse(sauvegardeRdv);
+            const liste: RendezVous[] = Array.isArray(donnees)
+              ? donnees
+              : donnees
+                ? [donnees as RendezVous]
+                : [];
+
+            const listeTriee = trierRendezVous(liste);
+            setRendezVous(listeTriee);
+
+            await AsyncStorage.setItem(
+              CLE_RENDEZ_VOUS,
+              JSON.stringify(listeTriee)
+            );
+          } else {
+            setRendezVous([]);
+          }
+
+          if (sauvegardeConversations) {
+            const donnees: unknown = JSON.parse(sauvegardeConversations);
+            setConversations(Array.isArray(donnees) ? donnees : []);
+          } else {
+            setConversations([]);
+          }
+        } catch (error) {
+          console.error("Erreur de chargement des données :", error);
         }
+      };
 
-        const donnees: unknown = JSON.parse(sauvegarde);
+      chargerDonnees();
 
-        // Accepte l'ancien format avec un seul rendez-vous.
-        const liste: RendezVous[] = Array.isArray(donnees)
-          ? donnees
-          : donnees
-            ? [donnees as RendezVous]
-            : [];
-
-        const listeTriee = trierRendezVous(liste);
-        setRendezVous(listeTriee);
-
-        // Garantit le stockage sous forme de tableau.
-        await AsyncStorage.setItem(
-          CLE_RENDEZ_VOUS,
-          JSON.stringify(listeTriee)
-        );
-      } catch (error) {
-        console.error("Erreur de chargement des rendez-vous :", error);
-        Alert.alert("Erreur", "Impossible de charger les rendez-vous.");
-      }
-    };
-
-    chargerRendezVous();
-  }, [])
-);
+      return () => {
+        actif = false;
+      };
+    }, [])
+  );
 
   const rendezVousAVenir = rendezVous.filter(
     (rdv) => dateHeureRendezVous(rdv).getTime() >= Date.now()
   );
 
   const prochainRendezVous = rendezVousAVenir[0];
+
+  const dernierMessageRecu = conversations
+    .flatMap((conversation) =>
+      (conversation.messages ?? [])
+        .filter((message) => !message.envoyeParMoi)
+        .map((message) => ({
+          conversation,
+          message,
+        }))
+    )
+    .sort(
+      (a, b) =>
+        (b.message.dateCreation ?? 0) - (a.message.dateCreation ?? 0)
+    )[0];
 
   const reinitialiserSelection = () => {
     setTypeRdv(null);
@@ -277,7 +357,7 @@ export default function IndexPatientScreen() {
         <View style={styles.header}>
           <View>
             <Text style={styles.label}>ESPACE PATIENT</Text>
-            <Text style={styles.title}>Bonjour, Patient 👋</Text>
+            <Text style={styles.title}>Bonjour, {nomPatient} 👋</Text>
           </View>
 
           <TouchableOpacity onPress={() => router.replace("/")}>
@@ -317,7 +397,7 @@ export default function IndexPatientScreen() {
               </Text>
 
               <Text style={styles.cardText}>
-                👨‍⚕️ {prochainRendezVous.medecin}
+                👨⚕️ {prochainRendezVous.medecin}
               </Text>
 
               {prochainRendezVous.type === "cabinet" &&
@@ -351,10 +431,46 @@ export default function IndexPatientScreen() {
           </TouchableOpacity>
         </View>
 
-        <View style={styles.card}>
+        <TouchableOpacity
+          style={styles.card}
+          activeOpacity={0.85}
+          onPress={() => router.push("/patient/messagerie")}
+        >
           <Text style={styles.cardTitle}>💬 Messagerie</Text>
-          <Text style={styles.cardText}>Échangez avec votre médecin.</Text>
-        </View>
+
+          {dernierMessageRecu ? (
+            <View style={styles.messagePreview}>
+              <View style={styles.messagePreviewHeader}>
+                <View style={styles.messageDoctor}>
+                  <Text style={styles.messageDoctorName}>
+                    {dernierMessageRecu.conversation.nom}
+                  </Text>
+                  <Text style={styles.messageSpecialty}>
+                    {dernierMessageRecu.conversation.specialite}
+                  </Text>
+                </View>
+
+                {dernierMessageRecu.conversation.doitRepondre && (
+                  <View style={styles.messageUnreadDot} />
+                )}
+              </View>
+
+              <Text style={styles.messagePreviewText} numberOfLines={2}>
+                {dernierMessageRecu.message.texte}
+              </Text>
+
+              <Text style={styles.messageTime}>
+                {dernierMessageRecu.message.heure}
+              </Text>
+            </View>
+          ) : (
+            <Text style={styles.cardText}>
+              Aucun message reçu pour le moment.
+            </Text>
+          )}
+
+          <Text style={styles.openMessages}>Ouvrir la messagerie ›</Text>
+        </TouchableOpacity>
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>📄 Mes documents</Text>
@@ -565,9 +681,7 @@ export default function IndexPatientScreen() {
                           setPlageRdv(`Matin — ${creneau.heure}`);
                         }}
                       >
-                        <Text style={styles.optionText}>
-                          {creneau.heure}
-                        </Text>
+                        <Text style={styles.optionText}>{creneau.heure}</Text>
                       </Pressable>
                     ))}
                   </View>
@@ -589,9 +703,7 @@ export default function IndexPatientScreen() {
                           setPlageRdv(`Après-midi — ${creneau.heure}`);
                         }}
                       >
-                        <Text style={styles.optionText}>
-                          {creneau.heure}
-                        </Text>
+                        <Text style={styles.optionText}>{creneau.heure}</Text>
                       </Pressable>
                     ))}
                   </View>
@@ -628,9 +740,7 @@ export default function IndexPatientScreen() {
                         : "Téléconsultation"}
                     </Text>
 
-                    <Text style={styles.summaryText}>
-                      Médecin : {medecin}
-                    </Text>
+                    <Text style={styles.summaryText}>Médecin : {medecin}</Text>
 
                     {typeRdv === "cabinet" && (
                       <Text style={styles.summaryText}>Lieu : {lieu}</Text>
@@ -773,6 +883,52 @@ const styles = StyleSheet.create({
   buttonText: {
     color: "white",
     fontWeight: "700",
+  },
+  messagePreview: {
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: "#E6EDF2",
+  },
+  messagePreviewHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  messageDoctor: {
+    flex: 1,
+  },
+  messageDoctorName: {
+    color: "#17324D",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  messageSpecialty: {
+    color: "#188B8B",
+    fontSize: 12,
+    marginTop: 2,
+  },
+  messagePreviewText: {
+    color: "#687786",
+    fontSize: 13,
+    marginTop: 6,
+  },
+  messageTime: {
+    color: "#8A9AA8",
+    fontSize: 11,
+    marginTop: 4,
+    textAlign: "right",
+  },
+  messageUnreadDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: "#168BFF",
+    marginLeft: 10,
+  },
+  openMessages: {
+    color: "#147D8C",
+    fontWeight: "600",
+    marginTop: 8,
   },
   modalOverlay: {
     flex: 1,
